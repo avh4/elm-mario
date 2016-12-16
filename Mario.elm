@@ -1,8 +1,14 @@
 module Main exposing (..)
 
+import AnimationFrame exposing (..)
+import Collage exposing (..)
+import Color exposing (..)
+import Element exposing (..)
+import Html exposing (Html)
 import Keyboard
+import Task
+import Time exposing (Time)
 import Window
-import Debug
 
 
 -- MODEL
@@ -14,6 +20,8 @@ type alias Model =
     , vx : Float
     , vy : Float
     , dir : Direction
+    , windowSize : Window.Size
+    , keys : Keys
     }
 
 
@@ -33,6 +41,8 @@ mario =
     , vx = 0
     , vy = 0
     , dir = Right
+    , windowSize = { width = 0, height = 0 }
+    , keys = { x = 0, y = 0 }
     }
 
 
@@ -40,14 +50,53 @@ mario =
 -- UPDATE
 
 
-step : ( Float, Keys ) -> Model -> Model
-step ( dt, keys ) mario =
-    mario
-        |> gravity dt
-        |> jump keys
-        |> walk keys
-        |> physics dt
-        |> Debug.watch "mario"
+applyKey : Int -> Keyboard.KeyCode -> Keys -> Keys
+applyKey scale key keys =
+    case key of
+        37 ->
+            { keys | x = -scale }
+
+        38 ->
+            { keys | y = scale }
+
+        39 ->
+            { keys | x = scale }
+
+        40 ->
+            { keys | y = -scale }
+
+        _ ->
+            keys
+
+
+step : Msg -> Model -> ( Model, Cmd Msg )
+step msg mario =
+    case msg of
+        Frame dt ->
+            ( mario
+                |> gravity (dt / 10)
+                |> jump mario.keys
+                |> walk mario.keys
+                |> physics (dt / 10)
+            , Cmd.none
+            )
+
+        KeyDown key ->
+            ( { mario
+                | keys = applyKey 1 key mario.keys
+              }
+            , Cmd.none
+            )
+
+        KeyUp key ->
+            ( { mario | keys = applyKey 0 key mario.keys }
+            , Cmd.none
+            )
+
+        WindowSize size ->
+            ( { mario | windowSize = size }
+            , Cmd.none
+            )
 
 
 jump : Keys -> Model -> Model
@@ -95,22 +144,24 @@ walk keys mario =
 -- DISPLAY
 
 
-display : ( Int, Int ) -> Model -> Element
-display ( w', h' ) mario =
+display : Model -> Html Msg
+display model =
     let
         ( w, h ) =
-            ( toFloat w', toFloat h' )
+            ( toFloat model.windowSize.width
+            , toFloat model.windowSize.height
+            )
 
         verb =
-            if mario.y > 0 then
+            if model.y > 0 then
                 "jump"
-            else if mario.vx /= 0 then
+            else if model.vx /= 0 then
                 "walk"
             else
                 "stand"
 
         dir =
-            case mario.dir of
+            case model.dir of
                 Left ->
                     "left"
 
@@ -126,8 +177,9 @@ display ( w', h' ) mario =
         groundY =
             62 - h / 2
     in
-        collage w'
-            h'
+        collage
+            model.windowSize.width
+            model.windowSize.height
             [ rect w h
                 |> filled (rgb 174 238 238)
             , rect w 50
@@ -135,27 +187,34 @@ display ( w', h' ) mario =
                 |> move ( 0, 24 - h / 2 )
             , marioImage
                 |> toForm
-                |> Debug.trace "mario"
-                |> move ( mario.x, mario.y + groundY )
+                |> move ( model.x, model.y + groundY )
             ]
+            |> Element.toHtml
 
 
 
--- SIGNALS
+-- PROGRAM
 
 
-main : Signal Element
+type Msg
+    = Frame Time
+    | KeyDown Keyboard.KeyCode
+    | KeyUp Keyboard.KeyCode
+    | WindowSize Window.Size
+
+
+main : Program Never Model Msg
 main =
-    lift2 display Window.dimensions (foldp step mario input)
-
-
-input : Signal ( Float, Keys )
-input =
-    let
-        delta =
-            lift (\t -> t / 20) (fps 25)
-
-        deltaArrows =
-            lift2 (,) delta (Debug.watch "arrows" <~ Keyboard.arrows)
-    in
-        sampleOn delta deltaArrows
+    Html.program
+        { init = ( mario, Window.size |> Task.perform WindowSize )
+        , update = step
+        , view = display
+        , subscriptions =
+            \model ->
+                Sub.batch
+                    [ Keyboard.downs KeyDown
+                    , Keyboard.ups KeyUp
+                    , AnimationFrame.diffs Frame
+                    , Window.resizes WindowSize
+                    ]
+        }
